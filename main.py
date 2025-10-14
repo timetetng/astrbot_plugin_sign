@@ -29,11 +29,11 @@ LUCK_CARD_PERCENT_COST_TIERS = (
     0.01,   # 第2次使用 (已使用1次): 1%
     0.01,   # 第3次使用 (已使用2次): 1%
     0.03,   # 第4次使用 (已使用3次): 3%
-    0.05,   # 第5次使用 (已使用4次): 5%
-    0.10,   # 第6次使用 (已使用5次): 10%
-    0.20,   # 第7次使用 (已使用6次): 20%
-    0.40,   # 第8次使用 (已使用7次): 40%
-    0.80,   # 第9次使用 (已使用8次): 80%
+    0.03,   # 第5次使用 (已使用4次): 5%
+    0.08,   # 第6次使用 (已使用5次): 10%
+    0.15,   # 第7次使用 (已使用6次): 20%
+    0.30,   # 第8次使用 (已使用7次): 40%
+    0.60,   # 第9次使用 (已使用8次): 80%
     0.90    # 第10次使用 (已使用9次): 90%
 ) # 第11次及以后将自动使用最后一个值 (90%)
 
@@ -441,91 +441,6 @@ class SignPlugin(Star):
             await self.db.close()
 
 
-    async def _check_and_consume_query_items(self, event: AstrMessageEvent) -> Optional[str]:
-        """
-        [优化版] 仅在/查询时调用，处理【转运卡】，使用事务优化数据库写入。
-        """
-        if getattr(event, 'items_consumed_this_event', False):
-            return None
-        
-        shop_api = shared_services.get("shop_api")
-        if not shop_api:
-            return None
-
-        user_id = event.get_sender_id()
-
-        # --- 转运卡逻辑 (分层百分比扣费) ---
-        if await shop_api.has_item(user_id, "luck_change_card"):
-            user_data = await self.db.get_user_data(user_id)
-            if not user_data:
-                return "错误：找不到您的用户数据。"
-
-            today_str = datetime.date.today().strftime('%Y-%m-%d')
-            
-            last_use_date = user_data.get('last_luck_change_card_use_date')
-            current_uses = user_data.get('luck_change_card_uses_today', 0)
-            if last_use_date != today_str:
-                current_uses = 0
-
-            if current_uses < len(LUCK_CARD_PERCENT_COST_TIERS):
-                current_percentage = LUCK_CARD_PERCENT_COST_TIERS[current_uses]
-            else:
-                current_percentage = LUCK_CARD_PERCENT_COST_TIERS[-1]
-
-            current_coins = user_data.get('coins', 0)
-            cost = int(current_coins * current_percentage)
-            
-            if current_coins <= 0 and cost > 0:
-                return f"金币不足！本次使用【转运卡】需要 {cost} 金币，而您没有金币。"
-
-            if await shop_api.consume_item(user_id, "luck_change_card"):
-                new_coins = current_coins - cost
-                fortune_result, fortune_value = SignManager.get_fortune()
-                if fortune_result == "圣辉" and shared_services:
-                    achievement_api = shared_services.get("achievement_api")
-                    if achievement_api:
-                        await achievement_api.unlock_achievement(
-                            user_id=user_id,
-                            achievement_id="lottery_holy_radiance",
-                            event=event
-                        )                      
-                # --- 优化点：调用单一事务方法，替换3次独立的数据库写入 ---
-                reason_for_cost = f"使用转运卡(第{current_uses + 1}次,成本:{current_percentage:.0%})"
-                
-                # --- 修改点: 在处理转运卡使用时，增加holy_light_uses_today=0的参数 ---
-                # 这可以确保每次重新抽取运势时，圣辉计数器都被重置
-                await self.db.process_luck_change_card_usage(
-                    user_id=user_id,
-                    new_coins=new_coins,
-                    cost=cost,
-                    fortune_result=fortune_result,
-                    fortune_value=fortune_value,
-                    new_uses_today=current_uses + 1,
-                    today_str=today_str,
-                    reason_for_cost=reason_for_cost,
-                    holy_light_uses_today=0 # <--- 新增此行
-                )
-                
-                next_use_index = current_uses + 1
-                if next_use_index < len(LUCK_CARD_PERCENT_COST_TIERS):
-                    next_percentage = LUCK_CARD_PERCENT_COST_TIERS[next_use_index]
-                else:
-                    next_percentage = LUCK_CARD_PERCENT_COST_TIERS[-1]
-                
-                msg = (
-                    f"✨ 消耗了您当前金币的 {current_percentage:.0%} ({cost} 金币) 和1张【转运卡】(今日第 {current_uses + 1} 次)...\n"
-                    f"您今日的运势刷新为: 【{fortune_result}】({fortune_value}/500)\n"
-                    f"💰 剩余金币: {new_coins}\n"
-                    f"📈 下一次使用成本: 您届时金币总额的 {next_percentage:.0%}"
-                )
-                
-                setattr(event, 'items_consumed_this_event', True)
-                return msg
-            else:
-                return "使用【转運卡】失败，请稍后再试。"
-        
-        return None
-
     async def _check_and_consume_lottery_items(self, event: AstrMessageEvent, user_data: Dict[str, Any]) -> Optional[str]:
         """
         用于检查并消耗抽奖相关的道具（幸运四叶草、抽奖券）。
@@ -575,6 +490,97 @@ class SignPlugin(Star):
             return "\n--------------------\n".join(consumed_item_messages)
             
         return None
+
+
+    @filter.command("转运", alias={"luckchange"})
+    async def luck_change_command(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        使用【转运卡】来刷新今日运势。
+        此操作会消耗一张转运卡，并根据您的总资产扣除一定比例的金币。
+        """
+        # 依赖服务获取 - 在函数执行时实时获取，打破循环依赖
+        shop_api = shared_services.get("shop_api")
+        stock_api = shared_services.get("stock_market_api")
+
+        if not shop_api:
+            return event.plain_result("错误：商店服务当前不可用。")
+        if not stock_api:
+            return event.plain_result("错误：股市服务当前不可用，无法计算您的总资产。")
+
+        user_id = event.get_sender_id()
+
+        # 检查用户是否拥有转运卡
+        if not await shop_api.has_item(user_id, "luck_change_card"):
+            return event.plain_result("您没有【转运卡】，无法进行转运。")
+
+        user_data = await self.db.get_user_data(user_id)
+        if not user_data:
+            return event.plain_result("错误：找不到您的用户数据。")
+
+        # --- 成本计算逻辑 ---
+        today_str = datetime.date.today().strftime('%Y-%m-%d')
+        last_use_date = user_data.get('last_luck_change_card_use_date')
+        current_uses = user_data.get('luck_change_card_uses_today', 0)
+        
+        if last_use_date != today_str:
+            current_uses = 0
+
+        # 根据当日使用次数确定成本比例
+        if current_uses < len(LUCK_CARD_PERCENT_COST_TIERS):
+            current_percentage = LUCK_CARD_PERCENT_COST_TIERS[current_uses]
+        else:
+            current_percentage = LUCK_CARD_PERCENT_COST_TIERS[-1]
+
+        # --- 按总资产计算成本 ---
+        asset_data = await stock_api.get_user_total_asset(user_id)
+        total_asset = asset_data.get('total_assets', 0)
+        cost = int(total_asset * current_percentage)
+        current_coins = user_data.get('coins', 0)
+        if current_coins < cost:
+            return event.plain_result(f"金币不足！本次转运需要 {cost} 金币，但您只有 {current_coins} 金币。")
+
+        # --- 消耗道具并执行转运 ---
+        if await shop_api.consume_item(user_id, "luck_change_card"):
+            new_coins = current_coins - cost
+            fortune_result, fortune_value = SignManager.get_fortune()
+
+            # 触发“圣辉”成就
+            if fortune_result == "圣辉" and shared_services:
+                achievement_api = shared_services.get("achievement_api")
+                if achievement_api:
+                    await achievement_api.unlock_achievement(
+                        user_id=user_id,
+                        achievement_id="lottery_holy_radiance",
+                        event=event
+                    )
+            
+            # 使用事务一次性更新数据库
+            reason_for_cost = f"使用转运卡(第{current_uses + 1}次,成本基于总资产的{current_percentage:.0%})"
+            await self.db.process_luck_change_card_usage(
+                user_id=user_id,
+                new_coins=new_coins,
+                cost=cost,
+                fortune_result=fortune_result,
+                fortune_value=fortune_value,
+                new_uses_today=current_uses + 1,
+                today_str=today_str,
+                reason_for_cost=reason_for_cost,
+                holy_light_uses_today=0
+            )
+            
+            # 计算下一次的使用成本
+            next_use_index = current_uses + 1
+            next_percentage = LUCK_CARD_PERCENT_COST_TIERS[next_use_index] if next_use_index < len(LUCK_CARD_PERCENT_COST_TIERS) else LUCK_CARD_PERCENT_COST_TIERS[-1]
+            
+            msg = (
+                f"✨ 消耗了您总资产的 {current_percentage:.0%} ({cost} 金币) 和1张【转运卡】(今日第 {current_uses + 1} 次)...\n"
+                f"您今日的运势刷新为: 【{fortune_result}】({fortune_value}/500)\n"
+                f"💰 剩余金币: {new_coins}\n"
+                f"📈 下一次使用成本: 您届时总资产的 {next_percentage:.0%}"
+            )
+            return event.plain_result(msg)
+        else:
+            return event.plain_result("使用【转运卡】失败，请稍后再试。")
 
     def _calculate_lottery_ev(self) -> Tuple[float, List[Dict[str, Any]]]:
         # ... (此函数无变化)
@@ -654,57 +660,73 @@ class SignPlugin(Star):
         
 
 
-    @filter.command("查询", alias={'query'})
-    async def query(self, event: AstrMessageEvent):
-        """查询个人或他人的签到信息"""
+    @filter.command("查询", alias={'query', 'info'})
+    async def query_command(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        查询个人或他人的签到、金币及运势信息。
+        用法: /查询 [@某人]
+        """
         try:
-            consume_msg = await self._check_and_consume_query_items(event)
-            if consume_msg:
-                yield event.plain_result(consume_msg)
-
+            # --- 1. 确定目标用户 ---
             target_user_id = None
+            # 遍历消息链以查找 @ 提及
             for component in event.message_obj.message:
                 if isinstance(component, Comp.At):
+                    # 在提供的文档中，'qq' 属性在 QQ 平台上代表用户 ID
                     target_user_id = component.qq
                     break
             
+            # 如果未找到提及，则默认为命令发送者
             if not target_user_id:
                 target_user_id = event.get_sender_id()
 
+            # --- 2. 获取用户数据 ---
             user_data = await self.db.get_user_data(target_user_id)
             today_str = datetime.date.today().strftime('%Y-%m-%d')
 
-            if target_user_id == event.get_sender_id():
-                user_name = event.get_sender_name()
-                if user_data and user_data.get('nickname') != user_name:
-                    await self.db.update_user_data(target_user_id, nickname=user_name)
-                    if user_data: user_data['nickname'] = user_name
-
+            # --- 3. 处理道具消耗（例如，抽奖券） ---
+            # 为清晰起见，此逻辑被分离开来。它处理那些在查询时应自动使用的道具。
             if user_data:
-                # 1. 尝试获取 nickname_api
-                nickname_api = shared_services.get("nickname_api")
-                display_name = None
-                if nickname_api:
-                    # 2. 直接调用API，它会返回最佳昵称
-                    display_name = await nickname_api.get_nickname(target_user_id)
+                consume_msg = await self._check_and_consume_lottery_items(event, user_data)
+                if consume_msg:
+                    # 单独发送消耗消息，这样它们就不会阻塞主查询结果
+                    await event.send(event.plain_result(consume_msg))
+                    # 重新获取数据，以防消耗操作改变了用户状态（如金币）
+                    user_data = await self.db.get_user_data(target_user_id)
 
-                # 3. 如果API调用成功，则直接使用，否则沿用旧的逻辑作为保底
+            # --- 4. 处理并显示数据 ---
+            if user_data:
+                # 第 4a 部分: 确定正确的显示名称
+                display_name = None
+                
+                # 如果是查询自己，则更新数据库中的昵称以匹配当前平台昵称
+                if str(target_user_id) == str(event.get_sender_id()):
+                    user_name = event.get_sender_name()
+                    if user_data.get('nickname') != user_name:
+                        await self.db.update_user_data(target_user_id, nickname=user_name)
+                        user_data['nickname'] = user_name # 同时更新本地副本
+
+                # 如果有专门的昵称服务，则使用它，否则回退到数据库中的昵称
+                nickname_api = shared_services.get("nickname_api")
+                if nickname_api:
+                    display_name = await nickname_api.get_nickname(target_user_id)
+                
                 if not display_name:
                     db_nickname = user_data.get('nickname')
                     user_id_str = user_data.get('user_id', target_user_id)
                     display_name = db_nickname or user_id_str
 
-                # --- 新增代码开始 ---
-                # 如果查询的是机器人自己 (ID: 1902929802)，则强制修改显示昵称
+                # 对机器人自己的名称进行特殊覆盖
                 if str(target_user_id) == '1902929802':
                     display_name = "菲比"
-                # --- 新增代码结束 ---
 
-                title = "✨ 您的签到信息 ✨" if target_user_id == event.get_sender_id() else f"✨ {display_name} 的签到信息 ✨"
+                # 第 4b 部分: 格式化输出消息
+                title = "✨ 您的签到信息 ✨" if str(target_user_id) == str(event.get_sender_id()) else f"✨ {display_name} 的签到信息 ✨"
                 
                 fortune_text = ""
                 if user_data.get('last_sign') == today_str:
                     fortune = user_data.get('last_fortune_result')
+                    # 假设 FORTUNE_EFFECTS 是一个将运势名称映射到其描述的字典
                     effect_desc = FORTUNE_EFFECTS.get(fortune, {}).get('description', '无特殊效果')
                     fortune_text = f"🔮 今日运势: 【{fortune or 'N/A'}】\n✨ 运势效果: {effect_desc}"
                 else:
@@ -713,6 +735,7 @@ class SignPlugin(Star):
                 if user_data.get('lucky_clover_buff_date') == today_str:
                     fortune_text += "\n🍀 幸运加持: 今日抽奖好运概率提升！"
 
+                # 组装最终的结果字符串
                 result_text = (
                     f"{title}\n"
                     f"--------------------\n"
@@ -726,19 +749,25 @@ class SignPlugin(Star):
                     f"{fortune_text}"
                 )
                 yield event.plain_result(result_text)
+
             else:
-                # --- 修改后的逻辑：对Bot显示特殊提示 ---
+                # --- 5. 处理用户无数据的情况 ---
+                # 如果查询的是机器人，则显示特殊消息
                 if str(target_user_id) == '1902929802':
                     not_found_msg = "菲比不需要签到哦~"
                 else:
-                    not_found_msg = "你还没有签到过哦，发送“/签到”来开始吧！使用“/签到帮助”了解更多" if target_user_id == event.get_sender_id() else f"用户 {target_user_id} 还没有签到记录哦。"
+                    # 对自己查询和查询他人使用不同的消息
+                    is_self_query = str(target_user_id) == str(event.get_sender_id())
+                    not_found_msg = "你还没有签到过哦，发送“/签到”来开始吧！" if is_self_query else f"用户 {target_user_id} 还没有签到记录哦。"
+                
                 yield event.plain_result(not_found_msg)
 
+            # 停止事件传播，防止被其他插件或 LLM 继续处理
             event.stop_event()
+
         except Exception as e:
-            logger.error(f"查询失败: {e}", exc_info=True)
-            yield event.plain_result("查询失败了喵~")
-            
+            logger.error(f"执行/查询命令时发生错误: {e}", exc_info=True)
+            yield event.plain_result("查询失败了，请稍后再试或联系管理员。")
 
     # ---------------------------------------------------------------------------------
     # 抽奖逻辑重构 - 新增的辅助函数
@@ -775,7 +804,7 @@ class SignPlugin(Star):
         consume_msg = await self._check_and_consume_lottery_items(event, user_data)
         if consume_msg:
             # 道具消耗会影响用户数据（如金币、抽奖次数），所以需要重新获取
-            await event.reply(consume_msg)
+            await event.send(event.plain_result(consume_msg))
             user_data = await self.db.get_user_data(user_id)
 
         # 5. 检查抽奖次数
