@@ -824,7 +824,8 @@ class SignPlugin(Star):
     def _apply_lottery_buffs(self, user_data: Dict) -> Tuple[List[int], float, float, str, str]:
         """
         根据用户当前的运势和道具，计算最终的抽奖权重、倍率等参数。
-        返回 (生效权重列表, 生效奖池命中率, 生效倍率修正, Buff信息文本, 用于日志的运势)
+        返回 (生效权重列表, 生效
+奖池命中率, 生效倍率修正, Buff信息文本, 用于日志的运势)
         """
         effective_tier_weights = TIER_WEIGHTS.copy()
         effective_jackpot_chance = JACKPOT_WIN_CHANCE
@@ -925,7 +926,7 @@ class SignPlugin(Star):
                     )
         elif bet_amount > prize_from_spin: # 未命中奖池且亏损，部分亏损注入奖池
             coins_lost = bet_amount - prize_from_spin
-            pool_add = int(coins_lost * 0.2)
+            pool_add = int(coins_lost * 0.4)
             final_pool_amount += pool_add
             pool_needs_update = True
 

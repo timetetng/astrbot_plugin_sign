@@ -467,65 +467,65 @@ class SignDatabase:
     async def process_luck_change_card_usage(self, user_id: str, new_coins: int, cost: int, fortune_result: str, fortune_value: int, new_uses_today: int, today_str: str, reason_for_cost: str, holy_light_uses_today: int):
         """[修正版] 在一个事务中处理转运卡的所有数据库更新。"""
         await self._ensure_connected()
-        try:
-            await self.conn.execute("BEGIN")
-            # 1. 更新用户数据
-            await self.conn.execute(
-                """UPDATE sign_data SET
-                   coins = ?, last_fortune_result = ?, last_fortune_value = ?,
-                   luck_change_card_uses_today = ?, last_luck_change_card_use_date = ?,
-                   holy_light_uses_today = ?
-                   WHERE user_id = ?""",
-                (new_coins, fortune_result, fortune_value, new_uses_today, today_str, holy_light_uses_today, user_id)
-            )
-            # 2. 记录金币日志
-            if cost > 0:
+        async with self._lock:  # <-- 在这里添加异步锁
+            try:
+                await self.conn.execute("BEGIN")
+                # 1. 更新用户数据
                 await self.conn.execute(
-                    'INSERT INTO coins_history (user_id, amount, reason) VALUES (?, ?, ?)',
-                    (user_id, -cost, reason_for_cost)
+                    """UPDATE sign_data SET
+                       coins = ?, last_fortune_result = ?, last_fortune_value = ?,
+                       luck_change_card_uses_today = ?, last_luck_change_card_use_date = ?,
+                       holy_light_uses_today = ?
+                       WHERE user_id = ?""",
+                    (new_coins, fortune_result, fortune_value, new_uses_today, today_str, holy_light_uses_today, user_id)
                 )
-            # 3. 记录运势日志
-            await self.conn.execute(
-                'INSERT INTO fortune_history (user_id, result, value) VALUES (?, ?, ?)',
-                (user_id, fortune_result, fortune_value)
-            )
-            await self.conn.commit()
-        except Exception as e:
-            await self.conn.rollback()
-            logger.error(f"转运卡数据库事务执行失败: {e}", exc_info=True)
-            raise # 重新抛出异常，让上层知道操作失败
+                # 2. 记录金币日志
+                if cost > 0:
+                    await self.conn.execute(
+                        'INSERT INTO coins_history (user_id, amount, reason) VALUES (?, ?, ?)',
+                        (user_id, -cost, reason_for_cost)
+                    )
+                # 3. 记录运势日志
+                await self.conn.execute(
+                    'INSERT INTO fortune_history (user_id, result, value) VALUES (?, ?, ?)',
+                    (user_id, fortune_result, fortune_value)
+                )
+                await self.conn.commit()
+            except Exception as e:
+                await self.conn.rollback()
+                logger.error(f"转运卡数据库事务执行失败: {e}", exc_info=True)
+                raise # 重新抛出异常，让上层知道操作失败
 
     async def process_lottery_ticket_usage(self, user_id: str, cost: int, current_extra_attempts: int) -> int:
         """[修正版] 在一个事务中处理抽奖券的所有数据库更新。返回更新后的金币余额。"""
         await self._ensure_connected()
-        try:
-            await self.conn.execute("BEGIN")
-            # 1. 获取当前金币
-            cursor = await self.conn.execute('SELECT coins FROM sign_data WHERE user_id = ?', (user_id,))
-            row = await cursor.fetchone()
-            current_coins = row['coins'] if row else 0
+        async with self._lock:  # <-- 也在这里添加异步锁
+            try:
+                await self.conn.execute("BEGIN")
+                # 1. 获取当前金币
+                cursor = await self.conn.execute('SELECT coins FROM sign_data WHERE user_id = ?', (user_id,))
+                row = await cursor.fetchone()
+                current_coins = row['coins'] if row else 0
 
-            # 2. 计算新金币并更新用户数据（金币和额外次数）
-            new_coins = current_coins - cost
-            new_extra_attempts = current_extra_attempts + 1
-            await self.conn.execute(
-                'UPDATE sign_data SET coins = ?, extra_lottery_attempts = ? WHERE user_id = ?',
-                (new_coins, new_extra_attempts, user_id)
-            )
+                # 2. 计算新金币并更新用户数据（金币和额外次数）
+                new_coins = current_coins - cost
+                new_extra_attempts = current_extra_attempts + 1
+                await self.conn.execute(
+                    'UPDATE sign_data SET coins = ?, extra_lottery_attempts = ? WHERE user_id = ?',
+                    (new_coins, new_extra_attempts, user_id)
+                )
 
-            # 3. 记录金币日志
-            await self.conn.execute(
-                'INSERT INTO coins_history (user_id, amount, reason) VALUES (?, ?, ?)',
-                (user_id, -cost, "使用抽奖券的代价")
-            )
-            await self.conn.commit()
-            return new_coins
-        except Exception as e:
-            await self.conn.rollback()
-            logger.error(f"抽奖券数据库事务执行失败: {e}", exc_info=True)
-            raise # 重新抛出异常，让上层知道操作失败
-
-    async def close(self):
+                # 3. 记录金币日志
+                await self.conn.execute(
+                    'INSERT INTO coins_history (user_id, amount, reason) VALUES (?, ?, ?)',
+                    (user_id, -cost, "使用抽奖券的代价")
+                )
+                await self.conn.commit()
+                return new_coins
+            except Exception as e:
+                await self.conn.rollback()
+                logger.error(f"抽奖券数据库事务执行失败: {e}", exc_info=True)
+                raise # 重新抛出异常，让上层知道操作失败    async def close(self):
         """关闭数据库连接"""
         if self.conn:
             await self.conn.close()
