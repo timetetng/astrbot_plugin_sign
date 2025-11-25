@@ -1,12 +1,12 @@
 # sign_manager.py
 
 import random
-from datetime import datetime, timedelta
-from typing import Tuple, Dict, Any
+from typing import Any
+
 
 class SignManager:
     @staticmethod
-    def calculate_sign_rewards(continuous_days: int) -> Tuple[int, int]:
+    def calculate_sign_rewards(continuous_days: int) -> tuple[int, int]:
         """计算签到奖励
         Returns:
             Tuple[基础奖励, 连续签到奖励]
@@ -16,7 +16,7 @@ class SignManager:
         return base_coins, bonus_coins
 
     @staticmethod
-    def get_fortune() -> Tuple[str, int]:
+    def get_fortune() -> tuple[str, int]:
         """获取每日运势
         Returns:
             Tuple[运势结果, 运势值]
@@ -25,15 +25,15 @@ class SignManager:
         fortune_value = random.randint(0, 500)
         if fortune_value == 500:
             return "圣辉", fortune_value
-        
+
         # --- 常规运势处理 ---
         fortune_levels = ["凶", "末小吉", "末吉", "小吉", "半吉", "吉", "大吉"]
         fortune_index = min(fortune_value // 71, 6)  # 修改除数为 71
         return fortune_levels[fortune_index], fortune_value
 
     @staticmethod
-    def format_sign_result(user_data: Dict[str, Any], coins_got: int, 
-                             coins_gift: int, fortune_result: str, 
+    def format_sign_result(user_data: dict[str, Any], coins_got: int,
+                             coins_gift: int, fortune_result: str,
                              fortune_value: int) -> str:
         """格式化签到结果"""
         return (

@@ -1,22 +1,21 @@
 # main.py
 
-import sys
-import os
 import asyncio
+import datetime
+import os
 import random
 import re
-import datetime
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Any
 
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
 import astrbot.api.message_components as Comp
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
+from astrbot.api.star import Context, Star, register
+
+from ..common.forwarder import Forwarder
 
 # --- 确保导入了 shared_services ---
 from ..common.services import shared_services
-from ..common.forwarder import Forwarder
-
 from .database import SignDatabase
 from .sign_manager import SignManager
 
@@ -89,12 +88,10 @@ FORTUNE_EFFECTS = {
 TIER_NAME_TO_INDEX = {tier[0]: i for i, tier in enumerate(LOTTERY_TIERS)}
 
 
-import logging
-from typing import Optional
 
 
 class EconomyAPI:
-    def __init__(self, db: 'SignDatabase'): # 使用引号避免循环导入
+    def __init__(self, db: "SignDatabase"): # 使用引号避免循环导入
         self._db = db
 
     def _format_coin_display(self, amount: int) -> str:
@@ -111,15 +108,15 @@ class EconomyAPI:
         user_data = await self._db.get_user_data(user_id)
         if not user_data:
             return 0
-        
-        raw_coins = user_data.get('coins', 0)
-        
+
+        raw_coins = user_data.get("coins", 0)
+
         try:
             return round(float(raw_coins or 0))
         except (ValueError, TypeError):
             return 0
 
- 
+
     async def add_coins(self, user_id: str, amount: int, reason: str) -> bool:
         """
         (Async) 为指定用户增加或减少金币。
@@ -132,21 +129,21 @@ class EconomyAPI:
             return False
 
         current_coins = await self.get_coins(user_id)
-        
+
         # <--- 核心修改点: 移除了余额检查的 if 语句 --->
         # 现在，即使用户余额为 10，扣除 50 也是允许的，结果将是 -40。
-        
+
         new_coins = current_coins + safe_amount
-        
+
         await self._db.update_user_data(user_id, coins=new_coins)
         await self._db.log_coins(user_id, safe_amount, reason)
-        
-        operation_text = '增加' if safe_amount >= 0 else '减少'
+
+        operation_text = "增加" if safe_amount >= 0 else "减少"
         result_text = f"余额变为 {new_coins}"
         if current_coins < 0 and new_coins > current_coins:
                  result_text = f"偿还欠款后，余额变为 {new_coins}"
         return True
-        
+
     async def set_coins(self, user_id: str, amount: int, reason: str) -> bool:
         """
         (Async, 慎用) 直接设置指定用户的金币数量。
@@ -157,26 +154,26 @@ class EconomyAPI:
         except (ValueError, TypeError):
             logger.error(f"API set_coins 失败: 传入的 amount '{amount}' 不是有效的数字。")
             return False
-            
+
         # <--- 注意: 这里的负数限制被保留 --->
         # 这是一个管理性质的操作，通常我们不希望管理员直接制造一个欠款用户。
         # 欠款应该是由正常的经济活动（如 add_coins 扣款）产生的。
         if safe_amount < 0:
             logger.error(f"API set_coins 失败: 目标金额 {safe_amount} 不能为负。如需扣款请使用 add_coins。")
             return False
-            
+
         current_coins = await self.get_coins(user_id)
         change_amount = safe_amount - current_coins
-        
+
         await self._db.update_user_data(user_id, coins=safe_amount)
         await self._db.log_coins(user_id, change_amount, reason)
         logger.info(f"API金币设置: 用户 {user_id} 金币被设置为 {safe_amount}, 原因: {reason}")
         return True
- 
+
     # ... get_user_profile, get_ranking, get_coin_history 方法保持不变 ...
     # 它们已经可以正确处理和显示负数金币了
 
-    async def get_user_profile(self, user_id: str) -> Optional[dict]:
+    async def get_user_profile(self, user_id: str) -> dict | None:
         """
         (Async) 获取用户的公开签到信息。
         (此处的金币字段仍然是格式化后的，用于显示)
@@ -184,15 +181,15 @@ class EconomyAPI:
         user_data = await self._db.get_user_data(user_id)
         if not user_data:
             return None
-            
+
         coins_value = await self.get_coins(user_id)
-        
+
         # 从数据库获取原始昵称
         display_nickname = user_data.get("nickname")
 
         # --- 新增代码开始 ---
         # 如果是机器人自己，则强制修改昵称
-        if str(user_id) == '1902929802':
+        if str(user_id) == "1902929802":
             display_nickname = "菲比"
         # --- 新增代码结束 ---
 
@@ -205,7 +202,7 @@ class EconomyAPI:
             "last_sign": user_data.get("last_sign")
         }
 
- 
+
     async def get_ranking(self, limit: int = 10) -> list:
         """
         (Async) 获取金币排行榜。
@@ -216,13 +213,13 @@ class EconomyAPI:
         formatted_ranking = []
         for row in ranking_data:
             profile = dict(row)
-            clean_coins = round(float(profile.get('coins', 0) or 0))
-            profile['coins'] = self._format_coin_display(clean_coins)
+            clean_coins = round(float(profile.get("coins", 0) or 0))
+            profile["coins"] = self._format_coin_display(clean_coins)
             formatted_ranking.append(profile)
-            
+
         return formatted_ranking
 
- 
+
     async def get_coin_history(self, user_id: str, limit: int = 5) -> list:
         """
         (Async) 获取指定用户的金币变动历史。
@@ -232,13 +229,13 @@ class EconomyAPI:
         formatted_history = []
         for row in history_data:
             history_item = dict(row)
-            clean_amount = round(float(history_item.get('amount', 0) or 0))
-            history_item['amount'] = self._format_coin_display(clean_amount)
+            clean_amount = round(float(history_item.get("amount", 0) or 0))
+            history_item["amount"] = self._format_coin_display(clean_amount)
             formatted_history.append(history_item)
 
         return formatted_history
 
-    async def get_incoming_transfer_history(self, user_id: str, limit: int = 1000) -> List[Dict]:
+    async def get_incoming_transfer_history(self, user_id: str, limit: int = 1000) -> list[dict]:
         """
         (新增) 获取指定用户的收款历史记录。
         
@@ -292,7 +289,7 @@ class EconomyAPI:
         返回一个字典列表，每条记录包含：时间戳、运势结果、运势值。
         """
         history_data = await self._db.get_fortune_history(user_id, limit=limit)
-        
+
         # 简单地将数据库行对象转换为字典列表，提供一个标准的API响应
         return [dict(row) for row in history_data] if history_data else []
 
@@ -315,19 +312,19 @@ class SignPlugin(Star):
         一个健壮的后台任务，在启动时检查一次，然后定时在每天23:59重置奖池。
         """
         logger.info("奖池每日重置任务已启动。")
-        
+
         # 任务启动时，先等待一小会儿，确保数据库等其他组件已准备好
         await asyncio.sleep(10)
 
         try:
             today_str = datetime.date.today().isoformat()
-            last_reset_date_str = await self.db.get_setting('last_jackpot_reset_date')
+            last_reset_date_str = await self.db.get_setting("last_jackpot_reset_date")
 
             if last_reset_date_str != today_str:
                 logger.info(f"检测到日期变更或首次运行（上次重置: {last_reset_date_str}, 今天: {today_str}），立即执行一次奖池重置...")
                 # 假设 JACKPOT_INITIAL_AMOUNT 是您定义的奖池初始金额
-                await self.db.set_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT))
-                await self.db.set_setting('last_jackpot_reset_date', today_str)
+                await self.db.set_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT))
+                await self.db.set_setting("last_jackpot_reset_date", today_str)
                 logger.info(f"奖池已成功重置为初始值: {JACKPOT_INITIAL_AMOUNT}。")
         except Exception as e:
             logger.error(f"启动时检查奖池重置失败: {e}", exc_info=True)
@@ -344,24 +341,24 @@ class SignPlugin(Star):
                 if now > next_run_time:
                     # 如果当前时间已经超过了今天的23:59，那么目标就是明天的23:59
                     next_run_time += datetime.timedelta(days=1)
-                
+
                 sleep_seconds = (next_run_time - now).total_seconds()
-                
+
                 logger.info(f"下一次奖池自动重置已安排在: {next_run_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                
+
                 # 2. 等待指定秒数
                 await asyncio.sleep(sleep_seconds)
 
                 # 3. 时间到了，执行重置操作
                 logger.info(f"到达预定时间 {next_run_time.strftime('%H:%M:%S')}, 开始执行每日奖池重置...")
-                await self.db.set_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT))
-                
+                await self.db.set_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT))
+
                 # 4. 记录重置日期
                 reset_date_str = next_run_time.date().isoformat()
-                await self.db.set_setting('last_jackpot_reset_date', reset_date_str)
-                
+                await self.db.set_setting("last_jackpot_reset_date", reset_date_str)
+
                 logger.info(f"每日奖池已成功重置为初始值: {JACKPOT_INITIAL_AMOUNT}，并已记录重置日期为 {reset_date_str}。")
-                
+
                 # 5. 短暂休眠61秒，以防止万一时间计算出问题导致CPU空转，并确保不会在同一分钟内重复执行
                 await asyncio.sleep(61)
 
@@ -380,12 +377,12 @@ class SignPlugin(Star):
         """
         try:
             logger.info("正在初始化签到插件...")
-    
-            await self.db.get_setting('placeholder', '0') 
 
-            if await self.db.get_setting('jackpot_pool') is None:
-                await self.db.set_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT))
-                
+            await self.db.get_setting("placeholder", "0")
+
+            if await self.db.get_setting("jackpot_pool") is None:
+                await self.db.set_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT))
+
             self.api = EconomyAPI(self.db)
             shared_services["economy_api"] = self.api
             logger.info("经济系统 API 已注册到全局服务。")
@@ -394,14 +391,14 @@ class SignPlugin(Star):
             logger.error(f"签到插件异步初始化失败: {e}", exc_info=True)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("刷新商店", alias={'重载商店'})
+    @filter.command("刷新商店", alias={"重载商店"})
     async def refresh_shop_items(self, event: AstrMessageEvent):
         """
         [管理员命令] 手动将此插件的物品注册到商店插件。
         """
         yield event.plain_result("尝试刷新商店商品...")
         shop_api = shared_services.get("shop_api")
-        
+
         if not shop_api:
             yield event.plain_result("❌ 失败：未找到商店服务 API。请确保已正确加载 `shop_plugin`。")
             return
@@ -441,42 +438,42 @@ class SignPlugin(Star):
             await self.db.close()
 
 
-    async def _check_and_consume_lottery_items(self, event: AstrMessageEvent, user_data: Dict[str, Any]) -> Optional[str]:
+    async def _check_and_consume_lottery_items(self, event: AstrMessageEvent, user_data: dict[str, Any]) -> str | None:
         """
         用于检查并消耗抽奖相关的道具（幸运四叶草、抽奖券）。
         """
-        if getattr(event, 'items_consumed_this_event', False):
+        if getattr(event, "items_consumed_this_event", False):
             return None
-            
+
         shop_api = shared_services.get("shop_api")
         if not shop_api:
             return None
- 
+
         user_id = event.get_sender_id()
-        today_str = datetime.date.today().strftime('%Y-%m-%d')
-        
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+
         consumed_item_messages = []
- 
+
         # 1. 检查幸运四叶草
-        if user_data.get('lucky_clover_buff_date') != today_str:
+        if user_data.get("lucky_clover_buff_date") != today_str:
             if await shop_api.has_item(user_id, "lucky_clover"):
                 if await shop_api.consume_item(user_id, "lucky_clover"):
                     await self.db.update_user_data(user_id, lucky_clover_buff_date=today_str)
                     msg = "🍀 您背包中的【幸运四叶草】已自动使用！\n今日您的抽奖将受到好运加持！"
                     consumed_item_messages.append(msg)
- 
+
         # 2. 检查抽奖券
         if await shop_api.has_item(user_id, "lottery_ticket"):
             if await shop_api.consume_item(user_id, "lottery_ticket"):
                 current_coins = await self.api.get_coins(user_id)
                 cost = int(current_coins * 0.20)
-                current_extra_attempts = user_data.get('extra_lottery_attempts', 0)
+                current_extra_attempts = user_data.get("extra_lottery_attempts", 0)
                 remaining_coins = await self.db.process_lottery_ticket_usage(
                     user_id=user_id,
                     cost=cost,
                     current_extra_attempts=current_extra_attempts
                 )
-                
+
                 msg = (
                     f"🎟️ 您背包中的【抽奖券】已自动使用！\n"
                     f"效果：增加 1 次今日抽奖次数。\n"
@@ -484,11 +481,11 @@ class SignPlugin(Star):
                     f"💰 剩余金币: {remaining_coins}"
                 )
                 consumed_item_messages.append(msg)
- 
+
         if consumed_item_messages:
-            setattr(event, 'items_consumed_this_event', True)
+            setattr(event, "items_consumed_this_event", True)
             return "\n--------------------\n".join(consumed_item_messages)
-            
+
         return None
 
 
@@ -518,10 +515,10 @@ class SignPlugin(Star):
             return event.plain_result("错误：找不到您的用户数据。")
 
         # --- 成本计算逻辑 ---
-        today_str = datetime.date.today().strftime('%Y-%m-%d')
-        last_use_date = user_data.get('last_luck_change_card_use_date')
-        current_uses = user_data.get('luck_change_card_uses_today', 0)
-        
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+        last_use_date = user_data.get("last_luck_change_card_use_date")
+        current_uses = user_data.get("luck_change_card_uses_today", 0)
+
         if last_use_date != today_str:
             current_uses = 0
 
@@ -533,9 +530,9 @@ class SignPlugin(Star):
 
         # --- 按总资产计算成本 ---
         asset_data = await stock_api.get_user_total_asset(user_id)
-        total_asset = asset_data.get('total_assets', 0)
+        total_asset = asset_data.get("total_assets", 0)
         cost = int(total_asset * current_percentage)
-        current_coins = user_data.get('coins', 0)
+        current_coins = user_data.get("coins", 0)
         if current_coins < cost:
             return event.plain_result(f"金币不足！本次转运需要 {cost} 金币，但您只有 {current_coins} 金币。")
 
@@ -553,7 +550,7 @@ class SignPlugin(Star):
                         achievement_id="lottery_holy_radiance",
                         event=event
                     )
-            
+
             # 使用事务一次性更新数据库
             reason_for_cost = f"使用转运卡(第{current_uses + 1}次,成本基于总资产的{current_percentage:.0%})"
             await self.db.process_luck_change_card_usage(
@@ -567,11 +564,11 @@ class SignPlugin(Star):
                 reason_for_cost=reason_for_cost,
                 holy_light_uses_today=0
             )
-            
+
             # 计算下一次的使用成本
             next_use_index = current_uses + 1
             next_percentage = LUCK_CARD_PERCENT_COST_TIERS[next_use_index] if next_use_index < len(LUCK_CARD_PERCENT_COST_TIERS) else LUCK_CARD_PERCENT_COST_TIERS[-1]
-            
+
             msg = (
                 f"✨ 消耗了您总资产的 {current_percentage:.0%} ({cost} 金币) 和1张【转运卡】(今日第 {current_uses + 1} 次)...\n"
                 f"您今日的运势刷新为: 【{fortune_result}】({fortune_value}/500)\n"
@@ -582,7 +579,7 @@ class SignPlugin(Star):
         else:
             return event.plain_result("使用【转运卡】失败，请稍后再试。")
 
-    def _calculate_lottery_ev(self) -> Tuple[float, List[Dict[str, Any]]]:
+    def _calculate_lottery_ev(self) -> tuple[float, list[dict[str, Any]]]:
         # ... (此函数无变化)
         total_ev = 0.0
         tier_details = []
@@ -597,18 +594,18 @@ class SignPlugin(Star):
             total_ev += ev_contribution
             tier_details.append({ "name": name, "probability": probability, "mult_range": mult_range })
         return total_ev, tier_details
- 
-    @filter.command("签到", alias={'sign'})
+
+    @filter.command("签到", alias={"sign"})
     async def sign(self, event: AstrMessageEvent):
         """每日签到"""
         try:
             user_id = event.get_sender_id()
             user_name = event.get_sender_name()
-            today_str = datetime.date.today().strftime('%Y-%m-%d')
+            today_str = datetime.date.today().strftime("%Y-%m-%d")
             user_data = await self.db.get_user_data(user_id) or {}
-            
-            if user_data.get('last_sign') == today_str:
-                if user_data.get('nickname') != user_name:
+
+            if user_data.get("last_sign") == today_str:
+                if user_data.get("nickname") != user_name:
                     await self.db.update_user_data(user_id, nickname=user_name)
                 response_text = "今天已经签到过啦喵~\n明天再来吧！"
                 # --- [修改] 直接输出文本 ---
@@ -616,11 +613,11 @@ class SignPlugin(Star):
                 event.stop_event()
                 return
 
-            yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-            continuous_days_new = user_data.get('continuous_days', 0) + 1 if user_data.get('last_sign') == yesterday_str else 1
+            yesterday_str = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            continuous_days_new = user_data.get("continuous_days", 0) + 1 if user_data.get("last_sign") == yesterday_str else 1
             coins_got, coins_gift = SignManager.calculate_sign_rewards(continuous_days_new)
             fortune_result, fortune_value = SignManager.get_fortune()
-            
+
             if fortune_result == "圣辉" and shared_services:
                 achievement_api = shared_services.get("achievement_api")
                 if achievement_api:
@@ -631,22 +628,22 @@ class SignPlugin(Star):
                     )
 
             display_data = user_data.copy()
-            display_data['continuous_days'] = continuous_days_new
+            display_data["continuous_days"] = continuous_days_new
             result_text = SignManager.format_sign_result(display_data, coins_got, coins_gift, fortune_result, fortune_value)
-            
+
             await self.db.update_user_data(
-                user_id, 
-                nickname=user_name, 
-                total_days=user_data.get('total_days', 0) + 1, 
-                last_sign=today_str, 
-                continuous_days=continuous_days_new, 
-                coins=user_data.get('coins', 0) + coins_got + coins_gift, 
-                total_coins_gift=user_data.get('total_coins_gift', 0) + coins_gift, 
-                last_fortune_result=fortune_result, 
+                user_id,
+                nickname=user_name,
+                total_days=user_data.get("total_days", 0) + 1,
+                last_sign=today_str,
+                continuous_days=continuous_days_new,
+                coins=user_data.get("coins", 0) + coins_got + coins_gift,
+                total_coins_gift=user_data.get("total_coins_gift", 0) + coins_gift,
+                last_fortune_result=fortune_result,
                 last_fortune_value=fortune_value,
                 holy_light_uses_today=0 # <--- 新增此行
             )
-            
+
             if coins_gift > 0: await self.db.log_coins(user_id, coins_gift, f"连续{continuous_days_new}天签到奖励")
             await self.db.log_fortune(user_id, fortune_result, value=fortune_value)
 
@@ -657,10 +654,10 @@ class SignPlugin(Star):
         except Exception as e:
             logger.error(f"签到失败: {e}", exc_info=True)
             yield event.plain_result("签到失败了喵~ 请联系管理员检查日志。")
-        
 
 
-    @filter.command("查询", alias={'query', 'info'})
+
+    @filter.command("查询", alias={"query", "info"})
     async def query_command(self, event: AstrMessageEvent) -> MessageEventResult:
         """
         查询个人或他人的签到、金币及运势信息。
@@ -675,14 +672,14 @@ class SignPlugin(Star):
                     # 在提供的文档中，'qq' 属性在 QQ 平台上代表用户 ID
                     target_user_id = component.qq
                     break
-            
+
             # 如果未找到提及，则默认为命令发送者
             if not target_user_id:
                 target_user_id = event.get_sender_id()
 
             # --- 2. 获取用户数据 ---
             user_data = await self.db.get_user_data(target_user_id)
-            today_str = datetime.date.today().strftime('%Y-%m-%d')
+            today_str = datetime.date.today().strftime("%Y-%m-%d")
 
             # --- 3. 处理道具消耗（例如，抽奖券） ---
             # 为清晰起见，此逻辑被分离开来。它处理那些在查询时应自动使用的道具。
@@ -698,41 +695,41 @@ class SignPlugin(Star):
             if user_data:
                 # 第 4a 部分: 确定正确的显示名称
                 display_name = None
-                
+
                 # 如果是查询自己，则更新数据库中的昵称以匹配当前平台昵称
                 if str(target_user_id) == str(event.get_sender_id()):
                     user_name = event.get_sender_name()
-                    if user_data.get('nickname') != user_name:
+                    if user_data.get("nickname") != user_name:
                         await self.db.update_user_data(target_user_id, nickname=user_name)
-                        user_data['nickname'] = user_name # 同时更新本地副本
+                        user_data["nickname"] = user_name # 同时更新本地副本
 
                 # 如果有专门的昵称服务，则使用它，否则回退到数据库中的昵称
                 nickname_api = shared_services.get("nickname_api")
                 if nickname_api:
                     display_name = await nickname_api.get_nickname(target_user_id)
-                
+
                 if not display_name:
-                    db_nickname = user_data.get('nickname')
-                    user_id_str = user_data.get('user_id', target_user_id)
+                    db_nickname = user_data.get("nickname")
+                    user_id_str = user_data.get("user_id", target_user_id)
                     display_name = db_nickname or user_id_str
 
                 # 对机器人自己的名称进行特殊覆盖
-                if str(target_user_id) == '1902929802':
+                if str(target_user_id) == "1902929802":
                     display_name = "菲比"
 
                 # 第 4b 部分: 格式化输出消息
                 title = "✨ 您的签到信息 ✨" if str(target_user_id) == str(event.get_sender_id()) else f"✨ {display_name} 的签到信息 ✨"
-                
+
                 fortune_text = ""
-                if user_data.get('last_sign') == today_str:
-                    fortune = user_data.get('last_fortune_result')
+                if user_data.get("last_sign") == today_str:
+                    fortune = user_data.get("last_fortune_result")
                     # 假设 FORTUNE_EFFECTS 是一个将运势名称映射到其描述的字典
-                    effect_desc = FORTUNE_EFFECTS.get(fortune, {}).get('description', '无特殊效果')
+                    effect_desc = FORTUNE_EFFECTS.get(fortune, {}).get("description", "无特殊效果")
                     fortune_text = f"🔮 今日运势: 【{fortune or 'N/A'}】\n✨ 运势效果: {effect_desc}"
                 else:
                     fortune_text = "🔮 今日运势: 尚未签到"
 
-                if user_data.get('lucky_clover_buff_date') == today_str:
+                if user_data.get("lucky_clover_buff_date") == today_str:
                     fortune_text += "\n🍀 幸运加持: 今日抽奖好运概率提升！"
 
                 # 组装最终的结果字符串
@@ -753,13 +750,13 @@ class SignPlugin(Star):
             else:
                 # --- 5. 处理用户无数据的情况 ---
                 # 如果查询的是机器人，则显示特殊消息
-                if str(target_user_id) == '1902929802':
+                if str(target_user_id) == "1902929802":
                     not_found_msg = "菲比不需要签到哦~"
                 else:
                     # 对自己查询和查询他人使用不同的消息
                     is_self_query = str(target_user_id) == str(event.get_sender_id())
                     not_found_msg = "你还没有签到过哦，发送“/签到”来开始吧！" if is_self_query else f"用户 {target_user_id} 还没有签到记录哦。"
-                
+
                 yield event.plain_result(not_found_msg)
 
             # 停止事件传播，防止被其他插件或 LLM 继续处理
@@ -773,7 +770,7 @@ class SignPlugin(Star):
     # 抽奖逻辑重构 - 新增的辅助函数
     # ---------------------------------------------------------------------------------
 
-    async def _validate_lottery_attempt(self, event: AstrMessageEvent, bet_amount_str: str) -> Tuple[Optional[str], Optional[Dict], Optional[int]]:
+    async def _validate_lottery_attempt(self, event: AstrMessageEvent, bet_amount_str: str) -> tuple[str | None, dict | None, int | None]:
         """
         验证抽奖尝试的有效性，包括参数、用户状态、次数和余额。
         返回 (错误信息, 更新后的用户数据, 下注金额)。如果验证通过，错误信息为None。
@@ -795,11 +792,11 @@ class SignPlugin(Star):
             return "您还没有签到记录，请先“签到”一次后再来抽奖哦~", None, None
 
         # 3. 每日状态重置 (抽奖次数、圣辉次数等)
-        today_str = datetime.date.today().strftime('%Y-%m-%d')
-        if user_data.get('last_lottery_date') != today_str:
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+        if user_data.get("last_lottery_date") != today_str:
             await self.db.update_user_data(user_id, lottery_count=0, extra_lottery_attempts=0, holy_light_uses_today=0)
             user_data = await self.db.get_user_data(user_id)
-        
+
         # 4. 检查并消耗抽奖道具 (抽奖券、四叶草)
         consume_msg = await self._check_and_consume_lottery_items(event, user_data)
         if consume_msg:
@@ -808,20 +805,20 @@ class SignPlugin(Star):
             user_data = await self.db.get_user_data(user_id)
 
         # 5. 检查抽奖次数
-        lottery_count = user_data.get('lottery_count', 0)
-        extra_attempts = user_data.get('extra_lottery_attempts', 0)
+        lottery_count = user_data.get("lottery_count", 0)
+        extra_attempts = user_data.get("extra_lottery_attempts", 0)
         total_attempts_today = MAX_LOTTERY_PER_DAY + extra_attempts
         if lottery_count >= total_attempts_today:
             return f"您今天的抽奖次数已用完 ({lottery_count}/{total_attempts_today})，明天再来吧！", user_data, bet_amount
 
         # 6. 检查金币余额
-        current_coins = user_data.get('coins', 0)
+        current_coins = user_data.get("coins", 0)
         if current_coins < bet_amount:
             return f"金币不足！本次抽奖需要 {bet_amount} 金币，您当前只有 {current_coins} 金币。", user_data, bet_amount
-            
+
         return None, user_data, bet_amount
 
-    def _apply_lottery_buffs(self, user_data: Dict) -> Tuple[List[int], float, float, str, str]:
+    def _apply_lottery_buffs(self, user_data: dict) -> tuple[list[int], float, float, str, str]:
         """
         根据用户当前的运势和道具，计算最终的抽奖权重、倍率等参数。
         返回 (生效权重列表, 生效奖池命中率, 生效倍率修正, Buff信息文本, 用于日志的运势)
@@ -831,23 +828,23 @@ class SignPlugin(Star):
         effective_prize_mult_mod = 1.0
         fortune_buff_message = ""
         current_fortune_for_log = "未签到"
-        today_str = datetime.date.today().strftime('%Y-%m-%d')
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
 
         # 1. 计算运势效果
-        if user_data.get('last_sign') == today_str:
-            user_fortune = user_data.get('last_fortune_result')
+        if user_data.get("last_sign") == today_str:
+            user_fortune = user_data.get("last_fortune_result")
             if user_fortune:
                 current_fortune_for_log = user_fortune
                 if user_fortune in FORTUNE_EFFECTS:
                     effect = FORTUNE_EFFECTS[user_fortune]
-                    
+
                     # 圣辉特殊逻辑：检查使用次数
-                    if effect.get('special_effect') == 'holy_light':
-                        holy_light_uses = user_data.get('holy_light_uses_today', 0)
+                    if effect.get("special_effect") == "holy_light":
+                        holy_light_uses = user_data.get("holy_light_uses_today", 0)
                         if holy_light_uses < 3:
                             fortune_buff_message = f"\n🔮 今日运势【{user_fortune}】效果发动 ({holy_light_uses + 1}/3)：\n{effect['description']}"
-                            effective_jackpot_chance *= effect.get('jackpot_chance_mult', 1.0)
-                            effective_prize_mult_mod = effect.get('prize_mult_mod', 1.0)
+                            effective_jackpot_chance *= effect.get("jackpot_chance_mult", 1.0)
+                            effective_prize_mult_mod = effect.get("prize_mult_mod", 1.0)
                             # 权重调整
                             positive_indices = [TIER_NAME_TO_INDEX[name] for name in ["💥传说大奖💥", "🎉稀有大奖🎉", "✨幸运奖励✨"]]
                             negative_indices = [TIER_NAME_TO_INDEX[name] for name in ["😅普通结果😅", "💨血本无归💨"]]
@@ -863,17 +860,17 @@ class SignPlugin(Star):
                             fortune_buff_message = f"\n🔮 今日运势【{user_fortune}】效果已用尽 (3/3)，本次抽奖无加成。"
                     else: # 其他运势通用逻辑
                         fortune_buff_message = f"\n🔮 今日运势【{user_fortune}】效果发动：\n{effect['description']}"
-                        effective_jackpot_chance *= effect.get('jackpot_chance_mult', 1.0)
-                        effective_prize_mult_mod = effect.get('prize_mult_mod', 1.0)
-                        tier_shift = effect.get('tier_shift')
+                        effective_jackpot_chance *= effect.get("jackpot_chance_mult", 1.0)
+                        effective_prize_mult_mod = effect.get("prize_mult_mod", 1.0)
+                        tier_shift = effect.get("tier_shift")
                         if tier_shift:
-                            from_idx, to_idx = TIER_NAME_TO_INDEX[tier_shift['from']], TIER_NAME_TO_INDEX[tier_shift['to']]
-                            actual_amount = min(effective_tier_weights[from_idx], tier_shift['amount'])
+                            from_idx, to_idx = TIER_NAME_TO_INDEX[tier_shift["from"]], TIER_NAME_TO_INDEX[tier_shift["to"]]
+                            actual_amount = min(effective_tier_weights[from_idx], tier_shift["amount"])
                             effective_tier_weights[from_idx] -= actual_amount
                             effective_tier_weights[to_idx] += actual_amount
 
         # 2. 计算幸运四叶草效果
-        if user_data.get('lucky_clover_buff_date') == today_str:
+        if user_data.get("lucky_clover_buff_date") == today_str:
             fortune_buff_message += "\n🍀 幸运四叶草效果发动：好运概率提升！"
             from_normal_idx, from_loss_idx = TIER_NAME_TO_INDEX["😅普通结果😅"], TIER_NAME_TO_INDEX["💨血本无归💨"]
             to_rare_idx, to_lucky_idx = TIER_NAME_TO_INDEX["🎉稀有大奖🎉"], TIER_NAME_TO_INDEX["✨幸运奖励✨"]
@@ -886,7 +883,7 @@ class SignPlugin(Star):
 
         return effective_tier_weights, effective_jackpot_chance, effective_prize_mult_mod, fortune_buff_message, current_fortune_for_log
 
-    async def _perform_lottery_draw(self, event: AstrMessageEvent, bet_amount: int, tier_weights: List[int], jackpot_chance: float, prize_mod: float) -> Tuple[Dict, int, int, str, int]:
+    async def _perform_lottery_draw(self, event: AstrMessageEvent, bet_amount: int, tier_weights: list[int], jackpot_chance: float, prize_mod: float) -> tuple[dict, int, int, str, int]:
         """
         执行核心的抽奖和奖池计算。
         返回 (抽中的奖项, 常规奖金, 奖池奖金, 奖池信息文本, 最终奖池金额)
@@ -898,7 +895,7 @@ class SignPlugin(Star):
         prize_from_spin = int(bet_amount * final_multiplier)
 
         # 2. 奖池计算
-        current_pool = int(await self.db.get_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT)))
+        current_pool = int(await self.db.get_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT)))
         final_pool_amount = current_pool
         jackpot_won_amount = 0
         jackpot_message = ""
@@ -930,15 +927,15 @@ class SignPlugin(Star):
             pool_needs_update = True
 
         if pool_needs_update:
-            await self.db.set_setting('jackpot_pool', str(final_pool_amount))
-            
+            await self.db.set_setting("jackpot_pool", str(final_pool_amount))
+
         return chosen_tier, prize_from_spin, jackpot_won_amount, jackpot_message, final_pool_amount
 
     # ---------------------------------------------------------------------------------
     # 重构后精简的 `lottery` 主函数
     # ---------------------------------------------------------------------------------
 
-    @filter.command("抽奖", alias={'lottery'})
+    @filter.command("抽奖", alias={"lottery"})
     async def lottery(self, event: AstrMessageEvent, bet_amount_str: str = ""):
         try:
             # 步骤 1: 验证抽奖的先决条件 (金额、次数、余额等)
@@ -949,7 +946,7 @@ class SignPlugin(Star):
 
             # 步骤 2: 基于用户运势和道具计算生效的抽奖参数
             weights, jackpot_chance, prize_mod, buff_msg, fortune_log = self._apply_lottery_buffs(user_data)
-            
+
             # 步骤 3: 执行抽奖，获取奖励和奖池结果
             tier, spin_prize, jackpot_prize, jackpot_msg, final_pool = await self._perform_lottery_draw(
                 event, bet_amount, weights, jackpot_chance, prize_mod
@@ -957,32 +954,32 @@ class SignPlugin(Star):
 
             # 步骤 4: 结算，更新数据库并生成最终消息
             # a. 计算金币和次数变化
-            current_coins = user_data.get('coins', 0)
-            lottery_count = user_data.get('lottery_count', 0)
+            current_coins = user_data.get("coins", 0)
+            lottery_count = user_data.get("lottery_count", 0)
             total_prize = spin_prize + jackpot_prize
             new_coins = current_coins - bet_amount + total_prize
-            
+
             # b. 如果使用了圣辉，增加其计数器
-            holy_light_uses_increment = 1 if user_data.get('last_fortune_result') == '圣辉' and user_data.get('holy_light_uses_today', 0) < 3 else 0
-            new_holy_light_uses = user_data.get('holy_light_uses_today', 0) + holy_light_uses_increment
-            
+            holy_light_uses_increment = 1 if user_data.get("last_fortune_result") == "圣辉" and user_data.get("holy_light_uses_today", 0) < 3 else 0
+            new_holy_light_uses = user_data.get("holy_light_uses_today", 0) + holy_light_uses_increment
+
             # c. 更新数据库
             await self.db.update_user_data(
                 event.get_sender_id(),
                 coins=new_coins,
                 lottery_count=lottery_count + 1,
-                last_lottery_date=datetime.date.today().strftime('%Y-%m-%d'),
+                last_lottery_date=datetime.date.today().strftime("%Y-%m-%d"),
                 holy_light_uses_today=new_holy_light_uses
             )
-            
+
             # d. 记录日志
-            await self.db.log_coins(event.get_sender_id(), -bet_amount, f"抽奖花费")
-            if spin_prize > 0: await self.db.log_coins(event.get_sender_id(), spin_prize, f"抽奖常规奖励")
-            if jackpot_prize > 0: await self.db.log_coins(event.get_sender_id(), jackpot_prize, f"🎉赢得奖池大奖！")
-            
+            await self.db.log_coins(event.get_sender_id(), -bet_amount, "抽奖花费")
+            if spin_prize > 0: await self.db.log_coins(event.get_sender_id(), spin_prize, "抽奖常规奖励")
+            if jackpot_prize > 0: await self.db.log_coins(event.get_sender_id(), jackpot_prize, "🎉赢得奖池大奖！")
+
             total_multiplier = total_prize / bet_amount if bet_amount > 0 else 0
             await self.db.log_lottery_play(
-                event.get_sender_id(), bet=bet_amount, prize=total_prize, 
+                event.get_sender_id(), bet=bet_amount, prize=total_prize,
                 multiplier=total_multiplier, jackpot=(jackpot_prize > 0), fortune=fortune_log
             )
             # 检查总倍率是否 > 0 且 < 0.01
@@ -993,10 +990,10 @@ class SignPlugin(Star):
                         user_id=event.get_sender_id(),
                         achievement_id="lottery_near_zero_multiplier",
                         event=event# 这是“与空气斗智斗勇”的ID
-                    )               
+                    )
             # e. 准备并发送最终消息
-            display_name = user_data.get('nickname', event.get_sender_name())
-            remaining_attempts = (MAX_LOTTERY_PER_DAY + user_data.get('extra_lottery_attempts', 0)) - (lottery_count + 1)
+            display_name = user_data.get("nickname", event.get_sender_name())
+            remaining_attempts = (MAX_LOTTERY_PER_DAY + user_data.get("extra_lottery_attempts", 0)) - (lottery_count + 1)
             final_message_from_tier = tier[3].format(multiplier=(spin_prize/bet_amount if bet_amount>0 else 0))
 
             result_msg = (
@@ -1018,8 +1015,8 @@ class SignPlugin(Star):
         except Exception as e:
             logger.error(f"抽奖失败: {e}", exc_info=True)
             yield event.plain_result("抽奖机好像坏掉了喵~ 请联系管理员。")
-            
-    @filter.command("梭哈", alias={'allin'})
+
+    @filter.command("梭哈", alias={"allin"})
     async def allin(self, event: AstrMessageEvent):
         """
         使用全部金币进行抽奖（已适配道具消耗逻辑）。
@@ -1047,11 +1044,11 @@ class SignPlugin(Star):
                 return
 
             # 步骤 3: 使用道具消耗后【剩余】的金币作为本次的梭哈金额
-            coins_after_consume = user_data_after_consume.get('coins', 0)
+            coins_after_consume = user_data_after_consume.get("coins", 0)
             if coins_after_consume <= 0:
                 yield event.plain_result("您没有金币可以梭哈了！(可能因为使用道具后余额不足)")
                 return
-            
+
             # 步骤 4: 调用 lottery 函数。
             # 由于 lottery 内部的道具检查有保护，不会重复消耗道具
             async for result in self.lottery(event, str(coins_after_consume)):
@@ -1063,47 +1060,47 @@ class SignPlugin(Star):
 
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("重置奖池", alias={'手动重置奖池'})
+    @filter.command("重置奖池", alias={"手动重置奖池"})
     async def manual_reset_jackpot(self, event: AstrMessageEvent):
         """
         [管理员命令] 手动将奖池金额重置为初始值。
         """
         try:
-            await self.db.set_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT))
+            await self.db.set_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT))
             logger.info(f"管理员 ({event.get_sender_id()}) 手动重置了奖池。")
             yield event.plain_result(f"✅ 操作成功！\n奖池金额已手动重置为初始值: {JACKPOT_INITIAL_AMOUNT}")
         except Exception as e:
             logger.error(f"手动重置奖池失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 操作失败，发生内部错误。请检查日志。")
-        
+            yield event.plain_result("❌ 操作失败，发生内部错误。请检查日志。")
+
         event.stop_event()
 
-    @filter.command("抽奖详细", alias={'抽奖概率'})
+    @filter.command("抽奖详细", alias={"抽奖概率"})
     async def lottery_details(self, event: AstrMessageEvent):
         """显示当前抽奖的详细概率分布和期望值"""
         try:
-            current_pool = int(await self.db.get_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT)))
+            current_pool = int(await self.db.get_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT)))
             total_ev, tier_details = self._calculate_lottery_ev()
-            
+
             details_text = ["--- 🎲 抽奖概率详细信息 🎲 ---"]
             details_text.append(f"🌊 当前奖池金额: {current_pool} 金币")
             details_text.append(f"🎯 基础命中概率: {JACKPOT_WIN_CHANCE * 100:.3f}% (可能受每日运势影响)")
             details_text.append("--------------------")
-            
+
             for detail in tier_details:
                 name, prob_percent, min_m, max_m = detail["name"], detail["probability"] * 100, detail["mult_range"][0], detail["mult_range"][1]
-                details_text.append(f'{name}: {prob_percent:.2f}% 概率, 倍率 [{min_m:.2f} ~ {max_m:.2f}]')
-            
+                details_text.append(f"{name}: {prob_percent:.2f}% 概率, 倍率 [{min_m:.2f} ~ {max_m:.2f}]")
+
             details_text.append("--------------------")
             details_text.append(f"📈 总期望倍率 (不含奖池和运势): {total_ev:.4f}x")
-            
+
             yield event.plain_result("\n".join(details_text))
             event.stop_event()
         except Exception as e:
             logger.error(f"获取抽奖详情失败: {e}", exc_info=True)
             yield event.plain_result("获取抽奖详情失败了喵~")
- 
-    @filter.command("排行", alias={'财富榜','金币排行', 'ranking'})
+
+    @filter.command("排行", alias={"财富榜","金币排行", "ranking"})
     async def ranking(self, event: AstrMessageEvent):
         """查看签到排行榜"""
         try:
@@ -1119,19 +1116,19 @@ class SignPlugin(Star):
             display_names = {}
             if nickname_api:
                 # 2. 批量获取所有昵称，API内部已处理好所有回退逻辑
-                user_ids_on_ranking = [row['user_id'] for row in ranking_data]
+                user_ids_on_ranking = [row["user_id"] for row in ranking_data]
                 display_names = await nickname_api.get_nicknames_batch(user_ids_on_ranking)
 
             entries = []
             for i, row in enumerate(ranking_data, 1):
-                user_id = row['user_id']
-                coins = row['coins']
-                total_days = row['total_days']
+                user_id = row["user_id"]
+                coins = row["coins"]
+                total_days = row["total_days"]
 
                 # 3. 直接从结果中取用，无需再写 or a or b 的复杂逻辑
                 # 如果API不存在，display_names为空字典，.get默认返回None，
                 # 最终会回退到row['nickname']或user_id，完全兼容
-                display_name = display_names.get(user_id) or row['nickname'] or user_id
+                display_name = display_names.get(user_id) or row["nickname"] or user_id
 
 
                 entries.append(f"🏅 第 {i} 名: {display_name}    {coins} 金币 (签到{total_days}天)")
@@ -1142,14 +1139,14 @@ class SignPlugin(Star):
         except Exception as e:
             logger.error(f"获取排行榜失败: {e}", exc_info=True)
             yield event.plain_result("排行榜不见了喵~")
- 
-    @filter.command("转账",alias={'v'})
+
+    @filter.command("转账",alias={"v"})
     async def transfer_coins(self, event: AstrMessageEvent):
         """向其他用户转账金币，支持@和用户ID（带阶梯税率和新手保护）"""
         try:
             sender_id = event.get_sender_id()
             sender_name = event.get_sender_name()
-            
+
             recipient_id = None
             amount_str = ""
 
@@ -1159,8 +1156,8 @@ class SignPlugin(Star):
                         recipient_id = component.qq
                 elif isinstance(component, Comp.Plain):
                     amount_str += component.text.strip()
-            
-            amount_match = re.search(r'\d+', amount_str)
+
+            amount_match = re.search(r"\d+", amount_str)
             amount = int(amount_match.group(0)) if amount_match else None
 
             if not recipient_id or amount is None:
@@ -1190,8 +1187,8 @@ class SignPlugin(Star):
                 event.stop_event()
                 return
 
-            sender_coins = sender_data.get('coins', 0)
-            
+            sender_coins = sender_data.get("coins", 0)
+
             if sender_coins < 1000:
                 fee_rate = 0.0  # 新手保护，免手续费
             elif sender_coins < 10000:
@@ -1204,14 +1201,14 @@ class SignPlugin(Star):
                 fee_rate = 0.25
             else: #  >= 100000
                 fee_rate = 0.30
-            
+
             # 如果费率不为0，才计算手续费，且最低为1
             fee = 0
             if fee_rate > 0:
                 fee = max(1, int(amount * fee_rate))
 
             total_cost = amount + fee
-            
+
             fee_message = ""
             if fee > 0:
                 fee_rate_percent = int(fee_rate * 100)
@@ -1229,16 +1226,16 @@ class SignPlugin(Star):
                 )
                 event.stop_event()
                 return
-            
-            recipient_name = recipient_data.get('nickname') or recipient_id
+
+            recipient_name = recipient_data.get("nickname") or recipient_id
 
             new_sender_coins = sender_coins - total_cost
-            new_recipient_coins = recipient_data.get('coins', 0) + amount
+            new_recipient_coins = recipient_data.get("coins", 0) + amount
             await self.db.update_user_data(sender_id, coins=new_sender_coins, nickname=sender_name)
             await self.db.update_user_data(recipient_id, coins=new_recipient_coins)
 
             await self.db.log_coins(sender_id, -amount, f"转账给用户 {recipient_id}")
-            
+
             if fee > 0:
                 fee_rate_percent = int(fee_rate * 100)
                 await self.db.log_coins(sender_id, -fee, f"转账手续费 ({fee_rate_percent}%)")
@@ -1264,23 +1261,23 @@ class SignPlugin(Star):
             logger.error(f"转账失败: {e}", exc_info=True)
             yield event.plain_result("转账时发生内部错误，请联系管理员。")
 
-    @filter.command("救济金", alias={'低保','v我点','救救我','救救孩子','分点钱','vivo50','v我50'})
+    @filter.command("救济金", alias={"低保","v我点","救救我","救救孩子","分点钱","vivo50","v我50"})
     async def relief_fund(self, event: AstrMessageEvent):
         """每日一次，从Bot（公共银行）处领取救济金。"""
         try:
             user_id = event.get_sender_id()
             user_name = event.get_sender_name()
             bot_id = event.message_obj.self_id
-            today_str = datetime.date.today().strftime('%Y-%m-%d')
+            today_str = datetime.date.today().strftime("%Y-%m-%d")
 
             # 1. 检查用户账户是否存在
             user_data = await self.db.get_user_data(user_id)
             if not user_data:
                 yield event.plain_result("您还没有签到记录，请先“签到”一次再来领取哦~")
                 return
-            
+
             # 2. 检查今天是否已经领取过
-            if user_data.get('last_relief_fund_date') == today_str:
+            if user_data.get("last_relief_fund_date") == today_str:
                 yield event.plain_result("您今天已经领取过菲比的救济金了，明天再来吧！")
                 return
 
@@ -1289,7 +1286,7 @@ class SignPlugin(Star):
             if bot_coins < 5000: # 银行至少需要有5000金币才能发放最低50的救济金
                 yield event.plain_result("抱歉，菲比的钱包空空...暂时无法帮助你...")
                 return
-                
+
             # 4. 计算救济金金额
             min_amount = 50
             if bot_coins < 100000:
@@ -1310,15 +1307,15 @@ class SignPlugin(Star):
                 logger.error(f"发放救济金失败：扣除Bot({bot_id})余额时失败。")
                 yield event.plain_result("系统内部错误，菲比发放救济金失败，请联系管理员。")
                 return
-            
+
             # 给用户加钱
             user_transfer_success = await self.api.add_coins(user_id, relief_amount, "领取每日救济金")
 
             # 6. 更新用户的领取记录
             await self.db.update_user_data(user_id, last_relief_fund_date=today_str)
-            
+
             # 7. 发送成功消息
-            new_user_coins = user_data.get('coins', 0) + relief_amount
+            new_user_coins = user_data.get("coins", 0) + relief_amount
             yield event.plain_result(
                 f"✨ 每日菲比馈赠已到账！ ✨\n"
                 f"--------------------\n"
@@ -1331,7 +1328,7 @@ class SignPlugin(Star):
             yield event.plain_result("领取救济金时发生错误，请联系管理员。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("系统注册", alias={'adminreg'})
+    @filter.command("系统注册", alias={"adminreg"})
     async def admin_register_user(self, event: AstrMessageEvent, target: str):
         """
         [管理员] 为指定用户或Bot在经济系统中手动创建一个账户。
@@ -1339,7 +1336,7 @@ class SignPlugin(Star):
         """
         target_id = None
         # 判断目标是 'bot' 还是一个具体的用户ID
-        if target.lower() == 'bot':
+        if target.lower() == "bot":
             target_id = event.message_obj.self_id
         elif target.isdigit():
             target_id = target
@@ -1350,7 +1347,7 @@ class SignPlugin(Star):
         # 检查账户是否已存在
         existing_data = await self.db.get_user_data(target_id)
         if existing_data:
-            display_name = existing_data.get('nickname') or target_id
+            display_name = existing_data.get("nickname") or target_id
             yield event.plain_result(f"ℹ️ 用户 {display_name} 已存在于系统中，无需重复注册。")
             return
 
@@ -1361,7 +1358,7 @@ class SignPlugin(Star):
             custom_nickname = await nickname_api.get_nickname(target_id)
             if custom_nickname:
                 display_name = custom_nickname
-        
+
         # 创建一个初始的、干净的账户数据
         # 注意：签到天数等信息保持为0，金币也为0
         await self.db.update_user_data(
@@ -1377,7 +1374,7 @@ class SignPlugin(Star):
         yield event.plain_result(f"✅ 成功！\n已为用户 {display_name} ({target_id}) 在经济系统中创建了一个初始账户。")
 
 
-    @filter.command("安全转账", alias={'sv'})
+    @filter.command("安全转账", alias={"sv"})
     async def safe_transfer_coins(self, event: AstrMessageEvent):
         """
         向其他用户进行安全转账。
@@ -1386,7 +1383,7 @@ class SignPlugin(Star):
         try:
             sender_id = event.get_sender_id()
             sender_name = event.get_sender_name()
-            
+
             recipient_id = None
             amount_str = ""
 
@@ -1396,8 +1393,8 @@ class SignPlugin(Star):
                         recipient_id = component.qq
                 elif isinstance(component, Comp.Plain):
                     amount_str += component.text.strip()
-            
-            amount_match = re.search(r'\d+', amount_str)
+
+            amount_match = re.search(r"\d+", amount_str)
             # 这个金额是用户愿意付出的总成本
             total_deduction = int(amount_match.group(0)) if amount_match else None
 
@@ -1423,8 +1420,8 @@ class SignPlugin(Star):
                 yield event.plain_result(f"❌ 找不到用户 {recipient_id}。\n请确认对方已经签到过。")
                 return
 
-            sender_coins = sender_data.get('coins', 0)
-            
+            sender_coins = sender_data.get("coins", 0)
+
             # --- 核心逻辑 1：安全检查 ---
             # 直接检查用户余额是否足够支付他想花费的总金额
             if sender_coins < total_deduction:
@@ -1433,7 +1430,7 @@ class SignPlugin(Star):
                     f"您试图转出总计 {total_deduction} 金币，但您当前只有 {sender_coins} 金币。"
                 )
                 return
-            
+
             # (税率计算逻辑保持不变)
             if sender_coins < 1000:
                 fee_rate = 0.0
@@ -1447,7 +1444,7 @@ class SignPlugin(Star):
                 fee_rate = 0.25
             else:
                 fee_rate = 0.30
-            
+
             # --- 核心逻辑 2：反推金额和手续费 ---
             amount_to_recipient = 0
             fee = 0
@@ -1470,10 +1467,10 @@ class SignPlugin(Star):
                 return
 
             # (后续数据库操作和日志记录)
-            recipient_name = recipient_data.get('nickname') or recipient_id
+            recipient_name = recipient_data.get("nickname") or recipient_id
 
             new_sender_coins = sender_coins - total_deduction
-            new_recipient_coins = recipient_data.get('coins', 0) + amount_to_recipient
+            new_recipient_coins = recipient_data.get("coins", 0) + amount_to_recipient
             await self.db.update_user_data(sender_id, coins=new_sender_coins, nickname=sender_name)
             await self.db.update_user_data(recipient_id, coins=new_recipient_coins)
 
@@ -1498,101 +1495,101 @@ class SignPlugin(Star):
                 f"{success_fee_message}"
                 f"💰 您剩余的金币: {new_sender_coins}"
             )
-            
+
         except Exception as e:
             logger.error(f"安全转账失败: {e}", exc_info=True)
             yield event.plain_result("安全转账时发生内部错误，请联系管理员。")
 
-    @filter.command("转账记录", alias={'交易记录','收支记录'})
+    @filter.command("转账记录", alias={"交易记录","收支记录"})
     async def transfer_history(self, event: AstrMessageEvent):
         """查看最近10条转账记录"""
         try:
             user_id = event.get_sender_id()
             history = await self.db.get_transfer_history(user_id, limit=15)
-            
+
             header = "📜 您最近的15条转账记录 📜\n--------------------\n"
             if not history:
                 yield event.plain_result(header + "您还没有任何转账记录。")
                 return
- 
+
             entries = []
             for record in history:
-                dt_object = datetime.datetime.fromisoformat(record['timestamp'])
+                dt_object = datetime.datetime.fromisoformat(record["timestamp"])
                 formatted_time = dt_object.strftime("%m-%d %H:%M")
                 # 判断是转出还是转入
-                if record['sender_id'] == user_id:
+                if record["sender_id"] == user_id:
                     # 这是我发出的转账
-                    recipient_display = record['recipient_name'] or record['recipient_id']
+                    recipient_display = record["recipient_name"] or record["recipient_id"]
                     entries.append(f"[{formatted_time}] 🔴 转给 {recipient_display} {record['amount']} 金币 ")
                 else:
                     # 这是我收到的转账
-                    sender_display = record['sender_name'] or record['sender_id']
+                    sender_display = record["sender_name"] or record["sender_id"]
                     entries.append(f"[{formatted_time}] 🟢 收到 {sender_display} {record['amount']} 金币")
-            
+
             result_text = header + "\n".join(entries)
             yield event.plain_result(result_text)
- 
+
         except Exception as e:
             logger.error(f"获取转账记录失败: {e}", exc_info=True)
             yield event.plain_result("查询转账记录时出错，请联系管理员。")
- 
-    @filter.command("转入记录", alias={'收款记录'})
+
+    @filter.command("转入记录", alias={"收款记录"})
     async def incoming_history(self, event: AstrMessageEvent):
         """只查看收款记录"""
         try:
             user_id = event.get_sender_id()
             history = await self.db.get_incoming_transfers(user_id, limit=15)
-            
+
             header = "📜 您最近的15条收款记录 📜\n--------------------\n"
             if not history:
                 yield event.plain_result(header + "您还没有任何收款记录。")
                 return
- 
+
             entries = []
             for record in history:
-                dt_object = datetime.datetime.fromisoformat(record['timestamp'])
+                dt_object = datetime.datetime.fromisoformat(record["timestamp"])
                 formatted_time = dt_object.strftime("%m-%d %H:%M")
-                sender_display = record['sender_name'] or record['sender_id']
+                sender_display = record["sender_name"] or record["sender_id"]
                 entries.append(f"[{formatted_time}] 🟢 收到 {sender_display} {record['amount']} 金币")
-            
+
             result_text = header + "\n".join(entries)
             yield event.plain_result(result_text)
- 
+
         except Exception as e:
             logger.error(f"获取转入记录失败: {e}", exc_info=True)
             yield event.plain_result("查询收款记录时出错，请联系管理员。")
- 
-    @filter.command("转出记录", alias={'付款记录'})
+
+    @filter.command("转出记录", alias={"付款记录"})
     async def outgoing_history(self, event: AstrMessageEvent):
         """只查看付款记录"""
         try:
             user_id = event.get_sender_id()
             history = await self.db.get_outgoing_transfers(user_id, limit=15)
-            
+
             header = "📜 您最近的15条付款记录 📜\n--------------------\n"
             if not history:
                 yield event.plain_result(header + "您还没有任何付款记录。")
                 return
- 
+
             entries = []
             for record in history:
-                dt_object = datetime.datetime.fromisoformat(record['timestamp'])
+                dt_object = datetime.datetime.fromisoformat(record["timestamp"])
                 formatted_time = dt_object.strftime("%m-%d %H:%M")
-                recipient_display = record['recipient_name'] or record['recipient_id']
+                recipient_display = record["recipient_name"] or record["recipient_id"]
                 entries.append(f"[{formatted_time}] 🔴 转给 {recipient_display} {record['amount']} 金币 ")
-            
+
             result_text = header + "\n".join(entries)
             yield event.plain_result(result_text)
- 
+
         except Exception as e:
             logger.error(f"获取转出记录失败: {e}", exc_info=True)
             yield event.plain_result("查询付款记录时出错，请联系管理员。")
- 
-    @filter.command("奖池信息", alias={'奖池', "奖池详细"})
+
+    @filter.command("奖池信息", alias={"奖池", "奖池详细"})
     async def jackpot_info(self, event: AstrMessageEvent):
         """查看当前奖池累计金额"""
         try:
-            current_pool = int(await self.db.get_setting('jackpot_pool', str(JACKPOT_INITIAL_AMOUNT)))
+            current_pool = int(await self.db.get_setting("jackpot_pool", str(JACKPOT_INITIAL_AMOUNT)))
             result_text = (
                 f"🌊 当前奖池累计金额 🌊\n"
                 f"--------------------\n"
@@ -1604,27 +1601,27 @@ class SignPlugin(Star):
         except Exception as e:
             logger.error(f"获取奖池信息失败: {e}", exc_info=True)
             yield event.plain_result("获取奖池信息失败了喵~")
- 
-    @filter.command("获奖记录", alias={'jackpot','中奖记录'})
+
+    @filter.command("获奖记录", alias={"jackpot","中奖记录"})
     async def jackpot_history(self, event: AstrMessageEvent):
         """查看历史获得奖池的用户记录"""
         try:
             records = await self.db.get_jackpot_wins(limit=5) # 最多显示最近5条
             header = "🏆 历史大奖赢家 (最近5条) 🏆\n--------------------\n"
-            
+
             if not records:
                 yield event.plain_result(header + "目前还没有人赢得过奖池大奖哦！")
                 event.stop_event()
                 return
-                
+
             entries = []
             for record in records:
                 # 数据库返回的是 UTC 时间，我们格式化一下
-                dt_object = datetime.datetime.fromisoformat(record['timestamp'])
+                dt_object = datetime.datetime.fromisoformat(record["timestamp"])
                 dt_object_utc8 = dt_object + datetime.timedelta(hours=0)
                 formatted_time = dt_object_utc8.strftime("%m-%d %H:%M")
                 entries.append(f"[{formatted_time}] 幸运儿 {record['nickname']} 赢得了 {record['amount']} 金币！")
-                
+
             result_text = header + "\n".join(entries)
             yield event.plain_result(result_text)
             event.stop_event()
@@ -1632,7 +1629,7 @@ class SignPlugin(Star):
             logger.error(f"获取获奖记录失败: {e}", exc_info=True)
             yield event.plain_result("获取获奖记录失败了喵~")
 
-    @filter.command("抽奖记录", alias={'lottery_history', 'lotteryhistory'})
+    @filter.command("抽奖记录", alias={"lottery_history", "lotteryhistory"})
     async def lottery_history(self, event: AstrMessageEvent):
         """查看最近10条抽奖记录"""
         try:
@@ -1648,29 +1645,29 @@ class SignPlugin(Star):
             entries = []
             for record in history:
                 # 1. 解析时间字符串并转换为 UTC+8
-                dt_object = datetime.datetime.fromisoformat(record['timestamp'])
+                dt_object = datetime.datetime.fromisoformat(record["timestamp"])
                 dt_object_utc8 = dt_object + datetime.timedelta(hours=8)
                 formatted_time = dt_object_utc8.strftime("%m-%d %H:%M")
-                
-                bet = record['bet_amount']
-                prize = record['prize_won']
-                multiplier = record['multiplier']
+
+                bet = record["bet_amount"]
+                prize = record["prize_won"]
+                multiplier = record["multiplier"]
 
                 # 判断输赢的图标
-                if record['is_jackpot']:
+                if record["is_jackpot"]:
                     icon = "🎊"
                 elif prize > bet:
                     icon = "🟢"
                 else:
                     icon = "🔴"
-                
+
                 # 2. 构建新的输出格式
                 entry_text = (
                     f"[{formatted_time}] {icon} "
                     f"投入: {bet}, 抽中: {prize} (倍率{multiplier:.2f}x)"
                 )
-                
-                if record['is_jackpot']:
+
+                if record["is_jackpot"]:
                     entry_text += " 🎉终极大奖!"
 
                 entries.append(entry_text)
@@ -1682,7 +1679,7 @@ class SignPlugin(Star):
             logger.error(f"获取抽奖记录失败: {e}", exc_info=True)
             yield event.plain_result("查询抽奖记录时出错，请联系管理员。")
 
-    @filter.command("签到帮助", alias={'sign_help'})
+    @filter.command("签到帮助", alias={"sign_help"})
     async def sign_help(self, event: AstrMessageEvent):
         """显示帮助信息，并使用新的 Forwarder 类发送"""
         help_text = (
@@ -1714,7 +1711,7 @@ class SignPlugin(Star):
         event.stop_event()
 
 
-    @filter.command("运势历史", alias={'运势记录'})
+    @filter.command("运势历史", alias={"运势记录"})
     async def fortune_history(self, event: AstrMessageEvent):
         # ... (此函数无变化)
         """查看历史运势记录"""
@@ -1728,7 +1725,7 @@ class SignPlugin(Star):
                 return
             entries = []
             for record in history:
-                dt_object = datetime.datetime.fromisoformat(record['timestamp'])
+                dt_object = datetime.datetime.fromisoformat(record["timestamp"])
                 formatted_time = dt_object.strftime("%Y-%m-%d %H:%M")
                 entries.append(f"[{formatted_time}] 抽到: 【{record['result']}】 ({record['value']}/500)")
             result_text = header + "\n".join(entries)
@@ -1740,7 +1737,7 @@ class SignPlugin(Star):
 
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("修改金币", alias={'setcoin'})
+    @filter.command("修改金币", alias={"setcoin"})
     async def modify_coins(self, event: AstrMessageEvent):
         """
         [管理员指令] 修改指定用户的金币。
@@ -1750,7 +1747,7 @@ class SignPlugin(Star):
         """
         target_user_id = None
         amount_str = None
-        
+
         # 1. 解析参数：从消息内容中分离出 @用户 和 金额
         # 遍历消息的所有部分（包括文本、@等）
         plain_text_parts = []
@@ -1761,11 +1758,11 @@ class SignPlugin(Star):
             elif isinstance(component, Comp.Plain):
                 # 将所有纯文本部分收集起来
                 plain_text_parts.append(component.text.strip())
-                
+
         # 从纯文本中查找数字作为金额
         full_text = " ".join(plain_text_parts)
         # 使用正则表达式查找第一个出现的数字串
-        amount_match = re.search(r'\d+', full_text)
+        amount_match = re.search(r"\d+", full_text)
         if amount_match:
             amount_str = amount_match.group(0)
 
@@ -1777,7 +1774,7 @@ class SignPlugin(Star):
         if amount_str is None:
             yield event.plain_result("❌ 命令格式错误！\n请提供要修改的金额。\n用法: /修改金币 <金额> [@用户]")
             return
-            
+
         try:
             new_amount = int(amount_str)
             if new_amount < 0:
@@ -1791,22 +1788,22 @@ class SignPlugin(Star):
         # 4. 执行数据库操作 (这部分逻辑和您原来的一样)
         try:
             user_data = await self.db.get_user_data(target_user_id)
-            old_amount = user_data.get('coins', 0) if user_data else 0
-            
+            old_amount = user_data.get("coins", 0) if user_data else 0
+
             await self.db.update_user_data(target_user_id, coins=new_amount)
-            
+
             change_amount = new_amount - old_amount
             reason = f"管理员 ({event.get_sender_id()}) 修改"
             await self.db.log_coins(target_user_id, change_amount, reason)
-            
-            target_display_name = (user_data.get('nickname') if user_data else None) or target_user_id
-            
+
+            target_display_name = (user_data.get("nickname") if user_data else None) or target_user_id
+
             # 判断是给自己还是给别人修改，以提供更清晰的反馈
             if target_user_id == event.get_sender_id():
                 yield event.plain_result(f"✅ 操作成功！\n您的金币已从 {old_amount} 修改为 {new_amount}。")
             else:
                 yield event.plain_result(f"✅ 操作成功！\n用户 {target_display_name} 的金币已从 {old_amount} 修改为 {new_amount}。")
-                
+
             event.stop_event()
         except Exception as e:
             logger.error(f"修改金币失败: {e}", exc_info=True)
